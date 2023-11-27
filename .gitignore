@@ -1,0 +1,13 @@
+#Ignore emacs backup files
+*.*~
+\#*\#
+
+#Ignore emacs cache directory
+eln-cache/
+auto-save-list/
+etc/
+var/ 
+tree-sitter/
+
+#Ignore installed packages
+straight
