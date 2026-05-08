@@ -154,6 +154,9 @@ Rendering keys:
   :renderer     function called as (FN DEFINITION ENTRY RULE)
   :plain        function called as (FN DEFINITION ENTRY RULE)
   :transform    function called as (FN DEFINITION ENTRY RULE)
+  :merge-definitions
+                function called as (FN DEFINITIONS ENTRIES RULE) to combine
+                multiple same-word entries from one dictionary before rendering
   :post-process function or list of functions called as
                 (FN START END ENTRY RULE)
   :faces        list of (REGEXP . FACE) rules applied to the rendered section
@@ -206,6 +209,11 @@ list.  The default keeps the order of DICTS and falls back to the order of
 (defface sdcv-abbreviation-doc-face
   '((t :inherit shadow :slant italic))
   "Face used for inline abbreviation expansion hints."
+  :group 'sdcv)
+
+(defface sdcv-title-face
+  '((t :inherit org-document-title :height 1.35 :weight bold))
+  "Face used for the lookup title in result buffers."
   :group 'sdcv)
 
 ;;; ── Internal state ───────────────────────────────────────────────────────────
@@ -834,6 +842,14 @@ Return the cleaned buffer contents."
                                  :foreground ,color
                                  :weight bold)))))
 
+(defun sdcv--apply-title-overlay (start end)
+  "Apply title styling overlay between START and END."
+  (let ((overlay (make-overlay start end)))
+    (overlay-put overlay 'sdcv-overlay t)
+    (overlay-put overlay 'evaporate t)
+    (overlay-put overlay 'priority 1000)
+    (overlay-put overlay 'face 'sdcv-title-face)))
+
 (defun sdcv--apply-face-overlay (start end face &optional priority)
   "Apply FACE as an overlay between START and END."
   (let ((overlay (make-overlay start end)))
@@ -1239,12 +1255,51 @@ annotations can render in the minibuffer UI without being shadowed."
         (sdcv--apply-shr-face-overlays section-start section-end entry rule))
       (sdcv--apply-face-rules section-start section-end
                               (sdcv--entry-face-rules entry rule))
+      (goto-char section-end)
       (set-marker section-start nil)
       (set-marker section-end nil))))
 
 (defun sdcv--render-entry (word entry)
   "Insert a rendered section for ENTRY looked up as WORD."
   (sdcv--render-dict-section word (list entry)))
+
+(defun sdcv--group-entries-by-word (entries)
+  "Return ENTRIES grouped by exact dictionary and found word."
+  (let (groups)
+    (dolist (entry entries)
+      (let* ((key   (list (or (alist-get 'dict entry) "")
+                          (or (alist-get 'word entry) "")))
+             (group (assoc key groups #'equal)))
+        (if group
+            (setcdr group (cons entry (cdr group)))
+          (push (list key entry) groups))))
+    (mapcar (lambda (group)
+              (cons (car group) (nreverse (cdr group))))
+            (nreverse groups))))
+
+(defun sdcv--merge-entry-group (entries)
+  "Return ENTRIES merged when their rendering rule provides a merger."
+  (let* ((first    (car entries))
+         (dict     (alist-get 'dict first))
+         (rule     (sdcv--rendering-rule dict))
+         (merge-fn (plist-get rule :merge-definitions)))
+    (if (and (functionp merge-fn) (cdr entries))
+        (let ((merged (copy-tree first)))
+          (setf (alist-get 'definition merged)
+                (funcall merge-fn
+                         (mapcar (lambda (entry)
+                                   (or (alist-get 'definition entry) ""))
+                                 entries)
+                         entries
+                         rule))
+          (list merged))
+      entries)))
+
+(defun sdcv--merge-dict-section-entries (entries)
+  "Merge same-word ENTRIES when the dictionary rule asks for it."
+  (mapcan (lambda (group)
+            (sdcv--merge-entry-group (cdr group)))
+          (sdcv--group-entries-by-word entries)))
 
 (defun sdcv--render-dict-section (word entries)
   "Insert one dictionary section containing all ENTRIES for WORD."
@@ -1257,7 +1312,7 @@ annotations can render in the minibuffer UI without being shadowed."
       (insert (format "* %s" display-name))
       (sdcv--apply-heading-overlay heading-start (point) color)
       (insert "\n\n"))
-    (cl-loop for entry in entries
+    (cl-loop for entry in (sdcv--merge-dict-section-entries entries)
              for first = t then nil
              do (progn
                   (unless first
@@ -1284,7 +1339,10 @@ KIND describes how the lookup resolved: `exact', `suggestion',
   (let ((inhibit-read-only t))
     (sdcv--clear-style-overlays)
     (erase-buffer)
-    (insert (format "#+TITLE: %s\n\n" word))
+    (let ((title-start (point)))
+      (insert word)
+      (sdcv--apply-title-overlay title-start (point))
+      (insert "\n\n"))
     (pcase kind
       ('suggestion
        (insert (format "/No exact match for \"%s\". Showing the closest hit./\n\n"

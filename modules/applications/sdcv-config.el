@@ -75,13 +75,19 @@
       :group 'sdcv)
 
 (defface sdcv-duden-phrase-face
-      '((t :foreground "medium orchid" :weight semibold))
+      '((((background dark)) :foreground "LightSteelBlue3" :weight semibold)
+        (((background light)) :foreground "SteelBlue4" :weight semibold))
       "Face used for rendered Duden idioms and fixed phrases."
       :group 'sdcv)
 
 (defface sdcv-duden-example-face
       '((t :slant italic))
       "Face used for rendered Duden examples."
+      :group 'sdcv)
+
+(defface sdcv-duden-reference-face
+      '((t :underline t))
+      "Face used for Duden cross-reference headwords."
       :group 'sdcv)
 
 (defface sdcv-abbreviation-face
@@ -103,12 +109,15 @@
 (defvar sdcv--duden-headword nil
       "Currently rendered Duden headword.")
 
+(defvar sdcv--duden-phrase-block-open nil
+      "Non-nil while rendering a Duden idiom/proverb block.")
+
 (defconst sdcv--duden-short-form-regexp
-  "\\(^\\|[[:space:](\\[\"'/*~]\\)%s\\.\\([[:space:],;:!?)]\\|[*~/]\\|$\\)"
+  "\\(^\\|[[:space:](\\[\"'/*~]\\)%s\\.\\([[:space:],;:!?.()]\\|[*~/]\\|$\\)"
   "Format regexp used to expand one-letter Duden abbreviations.")
 
 (defconst sdcv--duden-suffix-form-regexp
-  "\\(^\\|[[:space:](\\[\"'/*~]\\)-\\([[:alpha:]][[:alpha:]]*\\)\\([[:space:],;:!?)]\\|[*~/]\\|$\\)"
+  "\\(^\\|[[:space:](\\[\"'/*~]\\)-\\([[:alpha:]][[:alpha:]]*\\)\\([[:space:],;:!?.()]\\|[*~/]\\|$\\)"
   "Regexp used to expand Duden -suffix abbreviations.")
 
 (defvar sdcv--abbreviation-regexp-cache (make-hash-table :test #'equal)
@@ -211,6 +220,29 @@ This keeps the expansion Duden-specific by only touching quote content."
                      expanded t nil)
                   expanded)))
 
+(defun sdcv--duden-match-properties ()
+      "Return text properties near the current Duden abbreviation match."
+      (let ((positions (delq nil
+                             (list (match-end 1)
+                                   (match-beginning 2)
+                                   (match-beginning 0)))))
+            (catch 'properties
+                  (dolist (pos positions)
+                        (let ((properties (and (<= (point-min) pos)
+                                               (< pos (point-max))
+                                               (text-properties-at pos))))
+                              (when properties
+                                    (throw 'properties properties))))
+                  nil)))
+
+(defun sdcv--duden-propertize-like-match (text)
+      "Return TEXT with the current match's Duden text properties."
+      (if-let ((properties (sdcv--duden-match-properties)))
+              (let ((copy (copy-sequence text)))
+                    (add-text-properties 0 (length copy) properties copy)
+                    copy)
+            text))
+
 (defun sdcv--duden-expand-suffix-forms (start end entry _rule)
       "Expand Duden -suffix shorthand forms outside bsptext spans between START and END.
 Forms like -en or -ist that were not expanded during HTML rendering (i.e. they
@@ -223,7 +255,9 @@ appear outside #+begin_quote blocks) are concatenated with the headword here."
                                         sdcv--duden-suffix-form-regexp
                                         end t)
                               (replace-match
-                               (concat (match-string 1) word (match-string 2) (match-string 3))
+                               (sdcv--duden-propertize-like-match
+                                (concat (match-string 1) word
+                                        (match-string 2) (match-string 3)))
                                t t))))))
 
 (defun sdcv--duden-highlight-quote-blocks (start end _entry _rule)
@@ -236,29 +270,40 @@ appear outside #+begin_quote blocks) are concatenated with the headword here."
                               (sdcv--apply-face-overlay block-start (match-end 0)
                                                                              'sdcv-duden-quote-background-face 800))))))
 
-(defun sdcv--duden-highlight-headword-occurrences (start end entry _rule)
-      "Highlight all inline occurrences of the headword and its suffix-inflected forms.
-This makes forms expanded from -suffix notation visually match the main headword."
-      (when-let ((word (alist-get 'word entry)))
-            (save-excursion
-                  (goto-char start)
-                  (while (re-search-forward
-                                  (concat "\\b" (regexp-quote word) "[[:alpha:]]*\\b")
-                                  end t)
-                        (let ((beg (match-beginning 0))
-                              (fin (match-end 0)))
-                              (when (and (> beg start)
-                                         (< fin end)
-                                         (eq (char-before beg) ?*)
-                                         (eq (char-after fin) ?*))
-                                    (setq beg (1- beg)
-                                          fin (1+ fin)))
-                              (sdcv--apply-face-overlay beg fin
-                                                        'sdcv-duden-headword-face 960))))))
+(defun sdcv--duden-highlight-marked-headwords (start end _entry _rule)
+      "Apply one headword overlay to the first Duden headword marker."
+      (let ((pos start)
+            done)
+            (while (and (not done) (< pos end))
+                  (let ((next (or (next-single-property-change
+                                   pos 'sdcv-duden-headword nil end)
+                                  end)))
+                        (if (get-text-property pos 'sdcv-duden-headword)
+                                (progn
+                                      (sdcv--apply-face-overlay pos next
+                                                                'sdcv-duden-headword-face
+                                                                970)
+                                      (setq done t))
+                              (setq pos next))))))
+
+(defun sdcv--duden-highlight-references (start end _entry _rule)
+      "Underline Duden cross-reference headwords marked with ↑ between START and END."
+      (save-excursion
+            (goto-char start)
+            (while (re-search-forward "↑[[:space:]]*\\([[:alpha:]ÄÖÜäöüß][[:alpha:]ÄÖÜäöüß-]*\\)\\.?" end t)
+                  (let ((beg (match-beginning 1))
+                        (fin (match-end 1))
+                        (target (match-string-no-properties 1)))
+                        (add-text-properties beg fin
+                                             `(sdcv-lookup-word ,target
+                                               mouse-face highlight
+                                               help-echo ,(format "Lookup %s" target)))
+                        (sdcv--apply-face-overlay beg fin
+                                                  'sdcv-duden-reference-face 965)))))
 
 (defun sdcv--duden-polish-section (start end _entry _rule)
       "Normalize rendered Duden output between START and END."
-      (let ((content (buffer-substring-no-properties start end))
+      (let ((content (buffer-substring start end))
                         (in-quote nil)
                         lines)
             (dolist (line (split-string content "\n" nil))
@@ -290,9 +335,44 @@ This makes forms expanded from -suffix notation visually match the main headword
       "Return the concatenated plain text content of DOM NODE."
       (sdcv-dom-text node))
 
+(defconst sdcv--duden-superscript-digits
+  '((?0 . "⁰") (?1 . "¹") (?2 . "²") (?3 . "³") (?4 . "⁴")
+    (?5 . "⁵") (?6 . "⁶") (?7 . "⁷") (?8 . "⁸") (?9 . "⁹"))
+  "Mapping from ordinary digits to superscript digits for Duden headwords.")
+
+(defun sdcv--duden-superscript-string (text)
+      "Return TEXT with digits rendered as Unicode superscripts."
+      (mapconcat
+       (lambda (char)
+             (or (cdr (assq char sdcv--duden-superscript-digits))
+                 (char-to-string char)))
+       text
+       ""))
+
 (defun sdcv--duden-walk-children (nodes)
       "Render Duden DOM NODES at point."
       (sdcv-dom-each #'sdcv--duden-walk nodes))
+
+(defun sdcv--duden-open-phrase-block ()
+      "Open a Duden idiom/proverb quote block unless one is active."
+      (unless sdcv--duden-phrase-block-open
+            (unless (bolp) (insert "\n"))
+            (insert "\n#+begin_quote\n")
+            (setq sdcv--duden-phrase-block-open t)))
+
+(defun sdcv--duden-close-phrase-block ()
+      "Close the current Duden idiom/proverb quote block."
+      (when sdcv--duden-phrase-block-open
+            (unless (bolp) (insert "\n"))
+            (insert "#+end_quote\n\n")
+            (setq sdcv--duden-phrase-block-open nil)))
+
+(defun sdcv--duden-insert-text (text)
+      "Insert Duden TEXT with small spacing fixes."
+      (when (and (string-prefix-p "(" text)
+                 (not (sdcv--org-pre-boundary-p)))
+            (insert " "))
+      (insert text))
 
 (defun sdcv--duden-render-nodes-to-string (nodes)
       "Render Duden DOM NODES into a cleaned string."
@@ -303,7 +383,7 @@ This makes forms expanded from -suffix notation visually match the main headword
 (defun sdcv--duden-walk (node)
       "Walk Duden StarDict DOM NODE, inserting org-oriented text at point."
       (cond
-       ((stringp node) (insert node))
+       ((stringp node) (sdcv--duden-insert-text node))
        ((consp node)
             (let* ((tag   (sdcv-dom-tag node))
                                (attrs (sdcv-dom-attrs node))
@@ -311,23 +391,30 @@ This makes forms expanded from -suffix notation visually match the main headword
                   (pcase tag
                         ((or 'html 'head 'body) (sdcv--duden-walk-children kids))
                         ('br (insert "\n"))
+                        ('sup
+                         (insert
+                          (sdcv--duden-superscript-string
+                           (string-trim
+                            (mapconcat #'sdcv--duden-node-text kids "")))))
                         ('b
-                         (let ((sub (string-trim (mapconcat #'sdcv--duden-node-text kids ""))))
+                         (let ((sub (string-trim (sdcv--duden-render-nodes-to-string kids))))
                                (cond
                                     ((string-empty-p sub) nil)
                                     ((string= sub "*")
-                                     (unless (bolp) (insert "\n"))
-                                     (insert "\n"))
+                                     (sdcv--duden-open-phrase-block))
+                                    ((string= sub "R")
+                                     (sdcv--duden-open-phrase-block))
                                     ((string-match-p "\\`[a-z])\\'" sub)
                                      (insert "\n" sub " "))
                                     (t
                                      (let ((s (point)))
-                                           (sdcv--insert-org-wrapper "*" sub)
+                                           (insert sub)
                                            (add-text-properties
                                             s (point)
                                            (if (string-match-p " " sub)
                                                     '(face (:weight bold) sdcv-phrase t)
-                                                  '(face (:weight bold)))))))))
+                                                  '(face (:weight bold)
+                                                    sdcv-duden-headword t))))))))
                         ('i
                          (let* ((s0 (point))
                                             (_ (sdcv--duden-walk-children kids))
@@ -351,6 +438,7 @@ This makes forms expanded from -suffix notation visually match the main headword
                                                                                     '("blue" "0000ff" "#0000ff" "3333cc" "#3333cc"))
                                                             (string-match-p "\\`[0-9]+\\.\\'" text))
                                            (progn
+                                                 (sdcv--duden-close-phrase-block)
                                                  (insert "\n")
                                                  (insert text)
                                                  (insert " "))
@@ -360,10 +448,14 @@ This makes forms expanded from -suffix notation visually match the main headword
                                            (style (or (cdr (assq 'style attrs)) "")))
                                (cond
                                     ((equal class "bsp")
-                                     (insert "\n#+begin_quote\n")
+                                     (unless sdcv--duden-phrase-block-open
+                                           (insert "\n#+begin_quote\n"))
+                                     (when sdcv--duden-phrase-block-open
+                                           (unless (bolp) (insert "\n")))
                                      (sdcv--duden-walk-children kids)
                                      (unless (bolp) (insert "\n"))
-                                     (insert "#+end_quote\n"))
+                                     (unless sdcv--duden-phrase-block-open
+                                           (insert "#+end_quote\n")))
                                     ((equal class "bsptext")
                                      (let ((sub (sdcv--duden-render-nodes-to-string kids)))
                                            (unless (string-empty-p sub)
@@ -374,7 +466,11 @@ This makes forms expanded from -suffix notation visually match the main headword
                                            (unless (string-empty-p sub)
                                                  (sdcv--insert-org-wrapper "~" sub))))
                                     ((equal class "prag")
-                                     (sdcv--duden-walk-children kids))
+                                     (let ((sub (sdcv--duden-render-nodes-to-string kids)))
+                                           (unless (string-empty-p sub)
+                                                 (unless (sdcv--org-pre-boundary-p)
+                                                       (insert " "))
+                                                 (insert (string-trim-left sub)))))
                                     ((string-match-p "font-weight[ \t]*:[ \t]*normal" style)
                                      (sdcv--duden-walk-children kids))
                                     (t (sdcv--duden-walk-children kids)))))
@@ -386,6 +482,7 @@ EXTRY provides the headword for expanding Duden short forms."
       (if (not (fboundp 'libxml-parse-html-region))
                   (insert (sdcv--html-strip html entry) "\n")
             (let ((sdcv--duden-headword (alist-get 'word entry))
+                  (sdcv--duden-phrase-block-open nil)
                               (target (current-buffer))
                               (tmp (generate-new-buffer " *sdcv-duden-tmp*")))
                   (unwind-protect
@@ -394,7 +491,8 @@ EXTRY provides the headword for expanding Duden short forms."
                                       (insert html)
                                       (let ((dom (libxml-parse-html-region (point-min) (point-max))))
                                             (erase-buffer)
-                                            (sdcv--duden-walk dom))
+                                            (sdcv--duden-walk dom)
+                                            (sdcv--duden-close-phrase-block))
                                       ;; Normalize in-place, preserving text properties
                                       (goto-char (point-min))
                                       (while (re-search-forward "\n\n\n+" nil t) (replace-match "\n\n"))
@@ -423,7 +521,10 @@ EXTRY provides the headword for expanding Duden short forms."
                   (while (re-search-forward
                                           (format sdcv--duden-short-form-regexp initial)
                                           end t)
-                        (replace-match (concat "\\1" word "\\2") t nil)))))
+                        (replace-match
+                         (sdcv--duden-propertize-like-match
+                          (concat (match-string 1) word (match-string 2)))
+                         t t)))))
 
 (defun sdcv--duden-highlight-phrases (start end _entry _rule)
       "Highlight text marked as a Duden phrase between START and END."
@@ -434,6 +535,50 @@ EXTRY provides the headword for expanding Duden short forms."
                         (when (get-text-property pos 'sdcv-phrase)
                               (sdcv--apply-face-overlay pos next 'sdcv-duden-phrase-face 955))
                         (setq pos next)))))
+
+(defun sdcv--webster-definition-parts (definition)
+      "Return (LABEL . BODY) parsed from one Webster DEFINITION."
+      (let ((text (string-trim definition)))
+            (if (string-match
+                 "\\`(<I>\\([^<]+\\)</I>)[[:space:]\n]*<br[[:space:]/]*>[[:space:]\n]*\\(.*\\)\\'"
+                 text)
+                    (cons (match-string 1 text)
+                          (string-trim
+                           (replace-regexp-in-string
+                            "\\(?:<br[[:space:]/]*>\\|[[:space:]]\\)+\\'"
+                            ""
+                            (match-string 2 text))))
+                  (cons "" text))))
+
+(defun sdcv--webster-group-parts (parts)
+      "Group Webster PARTS by grammatical label while preserving order."
+      (let (groups)
+            (dolist (part parts)
+                  (let* ((label (car part))
+                         (body (cdr part))
+                         (group (assoc label groups #'string=)))
+                        (if group
+                                (setcdr group (append (cdr group) (list body)))
+                              (push (list label body) groups))))
+            (nreverse groups)))
+
+(defun sdcv--webster-render-definition-group (group)
+      "Render one grouped Webster definition GROUP back to HTML."
+      (let ((label (car group))
+            (bodies (cdr group)))
+            (concat
+             (unless (string-empty-p label)
+                   (format "(<I>%s</I>) <br>\n" label))
+             (mapconcat (lambda (body) (concat body "<br>"))
+                        bodies
+                        "\n"))))
+
+(defun sdcv--webster-merge-definitions (definitions _entries _rule)
+      "Merge Webster DEFINITIONS so repeated labels such as (a.) appear once."
+      (mapconcat #'sdcv--webster-render-definition-group
+                 (sdcv--webster-group-parts
+                  (mapcar #'sdcv--webster-definition-parts definitions))
+                 "<br>\n"))
 
 ;; Dictionary-specific renderers.
 ;; Rules can match by exact :name, by :regexp, or by :keywords.  The rule
@@ -449,8 +594,9 @@ EXTRY provides the headword for expanding Duden short forms."
                        #'sdcv--duden-polish-section
                        #'sdcv--duden-highlight-quote-blocks
                        #'sdcv--duden-highlight-phrases
-                       sdcv-duden-abbreviation-highlighter
-                       #'sdcv--duden-highlight-headword-occurrences)
+                       #'sdcv--duden-highlight-references
+                       #'sdcv--duden-highlight-marked-headwords
+                       sdcv-duden-abbreviation-highlighter)
         :faces '(("\\(~<[^>\n]+>~\\)" 1 sdcv-duden-meta-face)
                  ("^\\([0-9]+\\.\\)" 1 sdcv-duden-sense-face)
                  ("^\\([a-z])\\)" 1 sdcv-duden-sense-face)
@@ -459,18 +605,23 @@ EXTRY provides the headword for expanding Duden short forms."
                  ("^\\([^#*\n].*\\)$" 1 sdcv-duden-example-face)))
        (sdcv-html-rendering-rule
         :name "Duden – Das Synonymwörterbuch"
-        :post-process sdcv-duden-abbreviation-highlighter
+        :post-process (sdcv-compose-region-processors
+                       #'sdcv--duden-highlight-references
+                       sdcv-duden-abbreviation-highlighter)
         :faces '(("\\b[0-9]+\\." . font-lock-constant-face)
                  ("\\b[a-z])" . font-lock-keyword-face)
                  ("\\bSynonyme?\\b" . font-lock-function-name-face)))
        (sdcv-html-rendering-rule
         :name "Duden – Das Fremdwörterbuch"
-        :post-process sdcv-duden-abbreviation-highlighter
+        :post-process (sdcv-compose-region-processors
+                       #'sdcv--duden-highlight-references
+                       sdcv-duden-abbreviation-highlighter)
         :faces '(("\\b[0-9]+\\." . font-lock-constant-face)
                  ("\\b[a-z])" . font-lock-keyword-face)
                  ("\\bHerkunft\\b" . font-lock-function-name-face)))
        (sdcv-html-rendering-rule
         :name "Webster's Revised Unabridged Dictionary (1913)"
+        :merge-definitions #'sdcv--webster-merge-definitions
         :post-process sdcv-webster-abbreviation-highlighter
         :faces '(("\\b\\([0-9]+\\.\\)" 1 font-lock-constant-face)
                  ("\\b\\(n\\.\\|v\\.\\|a\\.\\|adj\\.\\|adv\\.\\)" 1 font-lock-keyword-face)))
