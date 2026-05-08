@@ -16,9 +16,7 @@
 ;; Usage:
 ;;   M-x sdcv-lookup-word-at-point   ; look up word under cursor
 ;;   M-x sdcv-lookup                 ; interactive with live candidates
-;;   M-x sdcv-lookup-all-dicts       ; search across all available dicts
-;;   M-x sdcv-lookup-select-dicts    ; choose dicts, then search
-;;   M-x sdcv-list-dicts             ; show available dicts
+;;   M-x sdcv-toggle-dicts           ; enable/disable configured dicts
 ;;
 ;; Example configuration:
 ;;   (setq sdcv-preferred-dicts
@@ -31,6 +29,7 @@
 (require 'org)
 (require 'shr)
 (require 'cl-lib)
+(require 'seq)
 (require 'subr-x)
 (require 'xml)
 
@@ -142,7 +141,9 @@ rules belong in user configuration such as `sdcv-config.el'.")
 (defcustom sdcv-rendering-rules sdcv--default-rendering-rules
   "Ordered list of dictionary-specific rendering rules.
 
-Each rule is a plist.  Match keys:
+Each rule is a plist, preferably created with `sdcv-rendering-rule',
+`sdcv-html-rendering-rule', `sdcv-xml-rendering-rule', or
+`sdcv-text-rendering-rule'.  Match keys:
   :name      exact dictionary name
   :regexp    regexp matched against the dictionary name
   :keywords  list of substrings; every keyword must occur in the name
@@ -414,55 +415,46 @@ With prefix arg REFRESH, force re-fetching."
   (let ((pref (sdcv--dict-plist name)))
     (if pref (or (plist-get pref :display) name) name)))
 
-(defun sdcv-list-dicts ()
-  "Display all available StarDict dictionaries in a dedicated buffer."
-  (interactive)
-  (let ((dicts (sdcv-available-dicts)))
-    (with-current-buffer (get-buffer-create "*sdcv-dicts*")
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (org-mode)
-        (read-only-mode -1)
-        (insert "* Available StarDict Dictionaries\n\n")
-        (if (null dicts)
-            (insert "/No dictionaries found.  Check `sdcv-data-dir'./\n")
-          (dolist (d dicts)
-            (let ((pref (sdcv--dict-plist d)))
-              (insert (format "- %s%s\n"
-                              (if pref
-                                  (format "*%s* (=%s=)"
-                                          (or (plist-get pref :display) d) d)
-                                d)
-                              (if pref " ★" ""))))))
-        (goto-char (point-min))
-        (read-only-mode 1))
-      (pop-to-buffer (current-buffer)))))
-
-(defun sdcv-select-dict ()
-  "Interactively select one dictionary via completing-read."
-  (interactive)
-  (let* ((dicts   (sdcv-available-dicts))
-         (choices (mapcar (lambda (d) (cons (sdcv--dict-display-name d) d)) dicts))
-         (sel     (completing-read "Dictionary: " (mapcar #'car choices) nil t)))
-    (cdr (assoc sel choices #'string=))))
-
-(defun sdcv-select-dicts ()
-  "Interactively select multiple dictionaries via completing-read-multiple."
-  (interactive)
-  (let* ((dicts   (sdcv-available-dicts))
-         (choices (mapcar (lambda (d) (cons (sdcv--dict-display-name d) d)) dicts))
-         (sel     (completing-read-multiple "Dictionaries: "
-                                            (mapcar #'car choices) nil t)))
-    (mapcar (lambda (s) (cdr (assoc s choices #'string=))) sel)))
-
 ;;; ── Dictionary toggle UI ────────────────────────────────────────────────────
 
 (defcustom sdcv-disabled-dicts nil
   "List of dict :name strings to skip during lookup.
-Modified interactively via `sdcv-toggle-dicts'.  Persists across sessions when
-set via Customize; for ad-hoc use just setq it."
+Modified interactively via `sdcv-toggle-dicts'."
   :type '(repeat string)
   :group 'sdcv)
+
+(defcustom sdcv-disabled-dicts-file
+  (expand-file-name "sdcv-disabled-dicts.el"
+                    (if (boundp 'no-littering-var-directory)
+                        no-littering-var-directory
+                      (expand-file-name "var" user-emacs-directory)))
+  "File used to persist `sdcv-disabled-dicts'.
+Set to nil to disable persistence for dictionary toggles."
+  :type '(choice (const :tag "Disabled" nil) file)
+  :group 'sdcv)
+
+(defun sdcv--disabled-dicts-load ()
+  "Load `sdcv-disabled-dicts' from `sdcv-disabled-dicts-file'."
+  (when (and sdcv-disabled-dicts-file
+             (file-readable-p sdcv-disabled-dicts-file))
+    (condition-case nil
+        (with-temp-buffer
+          (insert-file-contents sdcv-disabled-dicts-file)
+          (setq sdcv-disabled-dicts (read (current-buffer))))
+      (error (setq sdcv-disabled-dicts nil)))))
+
+(defun sdcv--disabled-dicts-save ()
+  "Save `sdcv-disabled-dicts' to `sdcv-disabled-dicts-file'."
+  (when sdcv-disabled-dicts-file
+    (condition-case nil
+        (let ((dir (file-name-directory sdcv-disabled-dicts-file)))
+          (unless (file-exists-p dir)
+            (make-directory dir t))
+          (with-temp-buffer
+            (insert (prin1-to-string sdcv-disabled-dicts))
+            (write-region (point-min) (point-max)
+                          sdcv-disabled-dicts-file nil 'quiet)))
+      (error nil))))
 
 (defvar sdcv-dict-toggle-mode-map
   (let ((map (make-sparse-keymap)))
@@ -501,10 +493,11 @@ set via Customize; for ad-hoc use just setq it."
           (replace-match (if (member name sdcv-disabled-dicts) "[ ]" "[X]"))))))) 
 
 (defun sdcv-dict-toggle-apply ()
-  "Apply the current selection, restart the sdcv process, and close the buffer."
+  "Apply the current selection, persist it, and restart the sdcv process."
   (interactive)
+  (sdcv--disabled-dicts-save)
   (sdcv-restart-process)
-  (message "sdcv: dictionary selection applied (%d disabled)" (length sdcv-disabled-dicts))
+  (message "sdcv: dictionary selection saved (%d disabled)" (length sdcv-disabled-dicts))
   (quit-window))
 
 (defun sdcv-toggle-dicts ()
@@ -538,6 +531,8 @@ RET/SPC toggles, C-c C-c applies and restarts, q quits."
   (if sdcv-disabled-dicts
       (seq-remove (lambda (n) (member n sdcv-disabled-dicts)) names)
     names))
+
+(sdcv--disabled-dicts-load)
 
 ;;; ── Search history ───────────────────────────────────────────────────────────
 
@@ -632,6 +627,136 @@ blacklisted names."
     (xml  . sdcv--xml-strip)
     (text . sdcv--text-plain))
   "Default plain-text renderers keyed by definition format.")
+
+(defun sdcv--plist-merge (defaults properties)
+  "Return a plist containing DEFAULTS overridden by PROPERTIES."
+  (let ((result (copy-sequence defaults)))
+    (while properties
+      (setq result (plist-put result (pop properties) (pop properties))))
+    result))
+
+(defun sdcv--as-list (value)
+  "Return VALUE as a list, treating nil as the empty list."
+  (cond
+   ((null value) nil)
+   ((listp value) value)
+   (t (list value))))
+
+(defun sdcv-function-list (value)
+  "Return VALUE normalized to a list of function values.
+Nil becomes nil, a single function becomes a one-element list, and non-function
+members are ignored.  This is useful for rule hooks such as :post-process."
+  (seq-filter #'functionp (sdcv--as-list value)))
+
+(defun sdcv-rendering-rule (&rest properties)
+  "Build a dictionary rendering rule from PROPERTIES.
+
+The returned value is a plist suitable for `sdcv-rendering-rules'.  This helper
+does not hide the underlying data shape; it just gives user configuration a
+stable public constructor instead of relying on private internals."
+  (copy-sequence properties))
+
+(defun sdcv-html-rendering-rule (&rest properties)
+  "Build an HTML rendering rule from PROPERTIES.
+Defaults to `sdcv--html-insert' for rendering and `sdcv--html-strip' for
+preview text.  Any explicit property in PROPERTIES overrides the default."
+  (apply #'sdcv-rendering-rule
+         (sdcv--plist-merge
+          (list :format 'html
+                :renderer #'sdcv--html-insert
+                :plain #'sdcv--html-strip)
+          properties)))
+
+(defun sdcv-xml-rendering-rule (&rest properties)
+  "Build an XML rendering rule from PROPERTIES."
+  (apply #'sdcv-rendering-rule
+         (sdcv--plist-merge
+          (list :format 'xml
+                :renderer #'sdcv--xml-insert
+                :plain #'sdcv--xml-strip)
+          properties)))
+
+(defun sdcv-text-rendering-rule (&rest properties)
+  "Build a plain text rendering rule from PROPERTIES."
+  (apply #'sdcv-rendering-rule
+         (sdcv--plist-merge
+          (list :format 'text
+                :renderer #'sdcv--text-insert
+                :plain #'sdcv--text-plain)
+          properties)))
+
+(defun sdcv-rendering-rule-list (&rest rules)
+  "Return RULES as a list suitable for `sdcv-rendering-rules'."
+  rules)
+
+(defun sdcv-compose-region-processors (&rest processors)
+  "Return a post-processor that applies PROCESSORS from left to right.
+Each processor is called with START END ENTRY RULE, matching the
+`:post-process' calling convention in `sdcv-rendering-rules'."
+  (lambda (start end entry rule)
+    (mapc (lambda (processor)
+            (funcall processor start end entry rule))
+          (sdcv-function-list processors))))
+
+(defun sdcv-rendered-string (renderer &rest args)
+  "Call RENDERER with ARGS in a temp buffer and return cleaned text."
+  (with-temp-buffer
+    (apply renderer args)
+    (sdcv--cleanup-rendered-buffer)))
+
+(defun sdcv-replace-region (start end text)
+  "Replace text between START and END with TEXT."
+  (save-excursion
+    (delete-region start end)
+    (goto-char start)
+    (insert text)))
+
+(defun sdcv-map-region-lines (start end function)
+  "Replace each line in START..END with the result of FUNCTION.
+FUNCTION receives a line string without its trailing newline and should return
+either a string or nil.  Nil keeps the original line."
+  (let* ((content          (buffer-substring-no-properties start end))
+         (kept-final-newline (string-suffix-p "\n" content))
+         (lines            (split-string content "\n"))
+         (body             (if kept-final-newline (butlast lines) lines))
+         (mapped           (mapcar (lambda (line)
+                                     (or (funcall function line) line))
+                                   body))
+         (replacement      (mapconcat #'identity mapped "\n")))
+    (sdcv-replace-region start end
+                         (if kept-final-newline
+                             (concat replacement "\n")
+                           replacement))))
+
+(defun sdcv-dom-tag (node)
+  "Return DOM NODE's tag symbol, or nil."
+  (when (consp node)
+    (car node)))
+
+(defun sdcv-dom-attrs (node)
+  "Return DOM NODE's attribute alist, or nil."
+  (when (consp node)
+    (cadr node)))
+
+(defun sdcv-dom-children (node)
+  "Return DOM NODE's child nodes."
+  (when (consp node)
+    (cddr node)))
+
+(defun sdcv-dom-attr (node attr)
+  "Return attribute ATTR from DOM NODE."
+  (cdr (assq attr (sdcv-dom-attrs node))))
+
+(defun sdcv-dom-text (node)
+  "Return concatenated plain text below DOM NODE."
+  (cond
+   ((stringp node) node)
+   ((consp node) (mapconcat #'sdcv-dom-text (sdcv-dom-children node) ""))
+   (t "")))
+
+(defun sdcv-dom-each (function nodes)
+  "Call FUNCTION for every DOM node in NODES."
+  (mapc function nodes))
 
 (defun sdcv--show-buffer-start (buffer)
   "Move point to the beginning of BUFFER in all visible windows."
@@ -803,19 +928,19 @@ whereas text properties set by `shr-insert-document' do not."
   (cond
    ((stringp node) (insert node))
    ((consp node)
-    (let ((tag (car node))
-          (kids (cddr node)))
+    (let ((tag (sdcv-dom-tag node))
+          (kids (sdcv-dom-children node)))
       (pcase tag
         ((or 'br 'lb) (insert "\n"))
         ((or 'li 'item)
          (insert "- ")
-         (mapc #'sdcv--xml-walk kids)
+         (sdcv-dom-each #'sdcv--xml-walk kids)
          (unless (bolp) (insert "\n")))
         ((or 'p 'para 'paragraph 'div 'section 'entry 'sense 'def 'definition
              'gloss 'table 'tr 'row)
-         (mapc #'sdcv--xml-walk kids)
+         (sdcv-dom-each #'sdcv--xml-walk kids)
          (unless (bolp) (insert "\n")))
-        (_ (mapc #'sdcv--xml-walk kids)))))))
+        (_ (sdcv-dom-each #'sdcv--xml-walk kids)))))))
 
 (defun sdcv--xml-rendered-string (xml)
   "Return XML rendered as readable text."
@@ -924,12 +1049,7 @@ Falls back to plain-text tag-stripping when libxml2 is unavailable."
 
 (defun sdcv--rule-post-processors (rule)
   "Return RULE's post-processors as a list of functions."
-  (let ((value (plist-get rule :post-process)))
-    (cond
-     ((null value) nil)
-     ((functionp value) (list value))
-     ((listp value) (seq-filter #'functionp value))
-     (t nil))))
+  (sdcv-function-list (plist-get rule :post-process)))
 
 (defun sdcv--entry-face-rules (entry rule)
   "Return the face rules applicable to ENTRY under RULE."
@@ -1041,7 +1161,7 @@ annotations can render in the minibuffer UI without being shadowed."
 (defun sdcv--register-marginalia ()
   "Register `sdcv-word' completion metadata with Marginalia."
   (when (boundp 'marginalia-command-categories)
-    (dolist (command '(sdcv-lookup sdcv-lookup-select-dicts))
+    (dolist (command '(sdcv-lookup))
       (setf (alist-get command marginalia-command-categories) 'sdcv-word)))
   (when (boundp 'marginalia-annotators)
     (setf (alist-get 'sdcv-word marginalia-annotators)
@@ -1525,23 +1645,6 @@ With DICTS (list of names), restrict search to those dictionaries."
     (when (and word (not (string-empty-p word)))
       (sdcv--display-word word :dicts dicts :allow-selector t))))
 
-;;;###autoload
-(defun sdcv-lookup-all-dicts ()
-  "Look up a word using ALL available dictionaries."
-  (interactive)
-  (let* ((all  (sdcv-available-dicts))
-         (word (or (thing-at-point 'word t)
-                   (read-string "Look up (all dicts): "))))
-    (when (and word (not (string-empty-p word)))
-      (sdcv--display-word word :dicts all :allow-selector t))))
-
-;;;###autoload
-(defun sdcv-lookup-select-dicts ()
-  "Select dictionaries interactively, then perform a word lookup."
-  (interactive)
-  (let ((dicts (sdcv-select-dicts)))
-    (sdcv-lookup dicts)))
-
 ;;; ── sdcv-mode minor mode ─────────────────────────────────────────────────────
 
 (defun sdcv-quit ()
@@ -1635,7 +1738,7 @@ Key bindings:
 
 ;; (global-set-key (kbd "C-c d")   #'sdcv-lookup)
 ;; (global-set-key (kbd "C-c D")   #'sdcv-lookup-word-at-point)
-;; (global-set-key (kbd "C-c M-d") #'sdcv-lookup-all-dicts)
+;; (global-set-key (kbd "C-c M-d") #'sdcv-toggle-dicts)
 
 (provide 'sdcv)
 ;;; sdcv.el ends here

@@ -1,8 +1,7 @@
-;;; sdcv-tests.el --- ERT tests for sdcv synonym formatter -*- lexical-binding: t; -*-
+;;; sdcv-tests.el --- ERT tests for sdcv rendering config -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Run with:  M-x ert RET t RET
-;; or from the command line:
+;; Run with:
 ;;   emacs --batch -Q -L ~/.emacs.d/modules/applications \
 ;;         -l sdcv -l sdcv-config -l sdcv-tests \
 ;;         --eval "(ert-run-tests-batch-and-exit)"
@@ -10,88 +9,48 @@
 ;;; Code:
 
 (require 'ert)
+(require 'sdcv)
+(require 'sdcv-config)
 
-(defun sdcv-test--listify (input)
-  "Apply `sdcv--duden-synonym-listify' to INPUT string and return result."
-  (with-temp-buffer
-    (insert input)
-    (let ((end (copy-marker (point-max) t)))
-      (sdcv--duden-synonym-listify (point-min) end nil nil))
-    (buffer-string)))
+(defconst sdcv-test--duden-html
+  (concat
+   "<FONT color=\"blue\"><B>l<U>au</U>fen</B></FONT>"
+   "<SPAN class=\"meta\"> &lt;st. V.&gt; </SPAN>"
+   "<BR><BR><FONT color=\"blue\">1.</FONT><BR>"
+   "<B>a)</B><I>sich fortbewegen: </I>"
+   "<SPAN class=\"bsp\"><SPAN class=\"bsptext\">"
+   "er musste l., um den Bus zu bekommen; "
+   "</SPAN></SPAN>"))
 
-;;; ── Basic transformations ────────────────────────────────────────────────────
+(defun sdcv-test--entry (dict word &optional definition)
+  "Build a minimal sdcv result entry for tests."
+  `((dict . ,dict)
+    (word . ,word)
+    (definition . ,definition)))
 
-(ert-deftest sdcv-test-listify/letter-prefix-basic ()
-  "\"a) w1, w2, w3\" is turned into a letter heading with sorted bullets."
-  (should (equal (sdcv-test--listify "a) heißen, sein, darstellen\n")
-                 "a)\n  - darstellen\n  - heißen\n  - sein\n")))
+(ert-deftest sdcv-test-duden-universal-does-not-create-org-lists ()
+  "Duden Universal rendering should not invent org bullet lists."
+  (skip-unless (fboundp 'libxml-parse-html-region))
+  (let* ((entry (sdcv-test--entry "Duden – Deutsches Universalwörterbuch"
+                                  "laufen"
+                                  sdcv-test--duden-html))
+         (output (with-temp-buffer
+                   (sdcv--render-entry "laufen" entry)
+                   (buffer-string))))
+    (should (string-match-p "^a) sich fortbewegen:" output))
+    (should (string-match-p "^er musste laufen, um den Bus zu bekommen;" output))
+    (should-not (string-match-p "^[[:space:]]*-[[:space:]]+a)" output))
+    (should-not (string-match-p "^[[:space:]]*-[[:space:]]+er musste" output))))
 
-(ert-deftest sdcv-test-listify/letter-prefix-with-dot ()
-  "\"a.) w1, w2\" (letter + period + paren) is also handled."
-  (should (equal (sdcv-test--listify "a.) meinen, ausdrücken\n")
-                 "a)\n  - ausdrücken\n  - meinen\n")))
+(ert-deftest sdcv-test-synonym-rule-has-no-list-postprocessor ()
+  "Synonym dictionaries should use plain HTML rendering without listification."
+  (let ((rule (sdcv--rendering-rule "Duden – Das Synonymwörterbuch")))
+    (should-not (plist-get rule :post-process))
+    (should (eq (plist-get rule :renderer) #'sdcv--html-insert))))
 
-(ert-deftest sdcv-test-listify/plain-commas ()
-  "A plain comma-separated line is sorted and turned into bullets."
-  (should (equal (sdcv-test--listify "Wien, Berlin, München\n")
-                 "  - Berlin\n  - München\n  - Wien\n")))
-
-(ert-deftest sdcv-test-listify/single-item-unchanged ()
-  "A line with no comma is left untouched."
-  (should (equal (sdcv-test--listify "bedeuten\n")
-                 "bedeuten\n")))
-
-(ert-deftest sdcv-test-listify/numbered-line-unchanged ()
-  "A bare numbered header like \"1.\" is not touched."
-  (should (equal (sdcv-test--listify "1.\n")
-                 "1.\n")))
-
-(ert-deftest sdcv-test-listify/hash-line-unchanged ()
-  "Lines starting with '#' (org headings) are not touched."
-  (should (equal (sdcv-test--listify "# Synonyme\n")
-                 "# Synonyme\n")))
-
-;;; ── Sorting ─────────────────────────────────────────────────────────────────
-
-(ert-deftest sdcv-test-listify/already-sorted ()
-  "Items that are already in order remain in order."
-  (should (equal (sdcv-test--listify "a) alpha, beta, gamma\n")
-                 "a)\n  - alpha\n  - beta\n  - gamma\n")))
-
-(ert-deftest sdcv-test-listify/reverse-order-sorted ()
-  "Items written in reverse order are sorted ascending."
-  (should (equal (sdcv-test--listify "c, b, a\n")
-                 "  - a\n  - b\n  - c\n")))
-
-;;; ── Full entry (bedeuten-style) ─────────────────────────────────────────────
-
-(ert-deftest sdcv-test-listify/full-bedeuten-entry ()
-  "A complete multi-sense entry is formatted with headings and sorted bullets."
-  (let ((input  (concat "1.\n"
-                        "a) heißen, sein, darstellen\n"
-                        "b) meinen, ausdrücken\n"
-                        "2.\n"
-                        "a) symbolisieren, verkörpern\n"))
-        (expect (concat "1.\n"
-                        "a)\n  - darstellen\n  - heißen\n  - sein\n"
-                        "b)\n  - ausdrücken\n  - meinen\n"
-                        "2.\n"
-                        "a)\n  - symbolisieren\n  - verkörpern\n")))
-    (should (equal (sdcv-test--listify input) expect))))
-
-;;; ── Semicolons as additional separators ─────────────────────────────────────
-
-(ert-deftest sdcv-test-listify/semicolon-separator ()
-  "Semicolons are treated as separators alongside commas."
-  (should (equal (sdcv-test--listify "a) alpha; beta, gamma\n")
-                 "a)\n  - alpha\n  - beta\n  - gamma\n")))
-
-;;; ── Two-item minimum ─────────────────────────────────────────────────────────
-
-(ert-deftest sdcv-test-listify/letter-prefix-one-item-unchanged ()
-  "A letter-prefix line with only one item is not reformatted."
-  (should (equal (sdcv-test--listify "a) einzig\n")
-                 "a) einzig\n")))
+(ert-deftest sdcv-test-vendor-html-colors-disabled ()
+  "Configuration should ignore dictionary-provided HTML colors."
+  (should-not sdcv-shr-use-colors))
 
 (provide 'sdcv-tests)
 ;;; sdcv-tests.el ends here
