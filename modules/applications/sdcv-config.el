@@ -8,13 +8,14 @@
                                                    buffer-file-name)))
         nil t))
 
-(unless (require 'sdcv-duden-abbreviations nil t)
-  (load (expand-file-name "sdcv-duden-abbreviations"
+(unless (require 'sdcv-abbreviations nil t)
+  (load (expand-file-name "sdcv-abbreviations"
                           (file-name-directory (or load-file-name
                                                    buffer-file-name)))
         nil t))
 
 (defvar sdcv-duden-abbreviations)
+(defvar sdcv-webster-abbreviations)
 
 ;; Dictionaries live in ~/.emacs.d/dicts/ (nested subdirectories)
 (setq sdcv-data-dir (expand-file-name "dicts" user-emacs-directory))
@@ -39,6 +40,9 @@
         (:name    "Duden – Das Fremdwörterbuch"
          :display "Duden Fremd"
          :color   "orchid")
+        (:name    "Webster's Revised Unabridged Dictionary (1913)"
+         :display "Webster"
+         :color   "forest green")
         (:name    "PONS Universelles Wörterbuch Englisch-Deutsch"
          :display "PONS EN→DE"
          :color   "goldenrod")
@@ -51,6 +55,9 @@
 
 ;; Show up to 100 chars in the completion annotation preview
 (setq sdcv-preview-chars 100)
+
+;; Show expanded dictionary abbreviations inline in the sdcv buffer.
+(setq sdcv-show-abbreviation-doc t)
 
 (defface sdcv-duden-headword-face
       '((t :foreground "tomato" :weight bold :height 1.1))
@@ -77,14 +84,14 @@
       "Face used for rendered Duden examples."
       :group 'sdcv)
 
-(defface sdcv-duden-abbreviation-face
+(defface sdcv-abbreviation-face
       '((t :foreground "gold"))
-      "Face for Duden usage/register abbreviations (jmdm., etw., ugs., …)."
+      "Face for dictionary usage/register abbreviations."
       :group 'sdcv)
 
-(defface sdcv-duden-abbreviation-link-face
+(defface sdcv-abbreviation-link-face
       '((t :inherit link :foreground "deep sky blue" :underline nil))
-      "Face used for clickable Duden abbreviations."
+      "Face used for clickable dictionary abbreviations."
       :group 'sdcv)
 
 (defface sdcv-duden-quote-background-face
@@ -104,47 +111,76 @@
   "\\(^\\|[[:space:](\\[\"'/*~]\\)-\\([[:alpha:]][[:alpha:]]*\\)\\([[:space:],;:!?)]\\|[*~/]\\|$\\)"
   "Regexp used to expand Duden -suffix abbreviations.")
 
-(defvar sdcv--duden-abbreviation-regexp nil
-  "Cached regexp matching Duden abbreviations.")
+(defvar sdcv--abbreviation-regexp-cache (make-hash-table :test #'equal)
+  "Cached regexps matching dictionary abbreviations by source.")
 
-(defun sdcv--duden-abbreviation-regexp ()
-      "Return a regexp that matches known Duden abbreviations."
-      (or sdcv--duden-abbreviation-regexp
-          (setq sdcv--duden-abbreviation-regexp
-                (concat "\\(?:\\`\\|[^[:alnum:]ÄÖÜäöüß]\\)\\("
-                        (regexp-opt
-                         (sort (mapcar #'car sdcv-duden-abbreviations)
-                               (lambda (left right)
-                                     (> (length left) (length right)))))
-                        "\\)\\(?:\\'\\|[^[:alnum:]ÄÖÜäöüß]\\)"))))
+(defun sdcv--abbreviation-alist (source)
+      "Return abbreviation alist from SOURCE.
+SOURCE may be an alist, a symbol naming an alist, or a function returning one."
+      (cond
+       ((symbolp source) (symbol-value source))
+       ((functionp source) (funcall source))
+       (t source)))
 
-(defun sdcv--duden-abbreviation-lookup-target (meaning)
+(defun sdcv--abbreviation-regexp (source)
+      "Return a regexp that matches abbreviations from SOURCE."
+      (or (gethash source sdcv--abbreviation-regexp-cache)
+          (puthash
+           source
+           (concat "\\(?:\\`\\|[^[:alnum:]ÄÖÜäöüß]\\)\\("
+                   (regexp-opt
+                    (sort (mapcar #'car (sdcv--abbreviation-alist source))
+                          (lambda (left right)
+                                (> (length left) (length right)))))
+                   "\\)\\(?:\\'\\|[^[:alnum:]ÄÖÜäöüß]\\)")
+           sdcv--abbreviation-regexp-cache)))
+
+(defun sdcv--abbreviation-lookup-target (meaning)
       "Return the lookup target for abbreviation MEANING."
       (string-trim
        (replace-regexp-in-string
         "[([][^])\n]*[])]" ""
         (car (split-string meaning "[,;]" t "[[:space:]]+")))))
 
-(defun sdcv--duden-highlight-abbreviations (start end _entry _rule)
-      "Color known Duden abbreviations and make RET look up their meaning."
-      (save-excursion
-            (goto-char start)
-            (while (re-search-forward (sdcv--duden-abbreviation-regexp) end t)
-                  (let* ((abbr (match-string-no-properties 1))
-                         (beg (match-beginning 1))
-                         (fin (match-end 1))
-                         (meaning (cdr (assoc abbr sdcv-duden-abbreviations #'string=)))
-                         (target (and meaning
-                                      (save-match-data
-                                            (sdcv--duden-abbreviation-lookup-target meaning)))))
-                        (when (and meaning target (not (string-empty-p target)))
-                              (add-text-properties
-                               beg fin
-                               `(sdcv-lookup-word ,target
-                                 help-echo ,(format "%s -> %s" abbr meaning)
-                                 mouse-face highlight))
-                              (sdcv--apply-face-overlay
-                               beg fin 'sdcv-duden-abbreviation-link-face 970))))))
+(defun sdcv--highlight-abbreviations (start end source)
+      "Color abbreviations from SOURCE and make RET look up their meaning."
+      (let ((abbreviations (sdcv--abbreviation-alist source)))
+            (save-excursion
+                  (goto-char (max (point-min) (1- start)))
+                  (while (re-search-forward (sdcv--abbreviation-regexp source) end t)
+                        (let* ((abbr (match-string-no-properties 1))
+                               (beg (match-beginning 1))
+                               (fin (match-end 1))
+                               (meaning (cdr (assoc-string abbr abbreviations nil)))
+                               (target (and meaning
+                                            (save-match-data
+                                                  (sdcv--abbreviation-lookup-target meaning)))))
+                              (when (and (>= beg start)
+                                         meaning
+                                         target
+                                         (not (string-empty-p target)))
+                                    (add-text-properties
+                                     beg fin
+                                     `(sdcv-lookup-word ,target
+                                       sdcv-abbreviation ,abbr
+                                       sdcv-abbreviation-meaning ,meaning
+                                       help-echo ,(format "%s -> %s" abbr meaning)
+                                       mouse-face highlight))
+                                    (sdcv--apply-face-overlay
+                                     beg fin 'sdcv-abbreviation-link-face 970)))))))
+
+(defun sdcv-abbreviation-highlighter (source)
+      "Return a region post-processor for abbreviation alist SOURCE."
+      (lambda (start end _entry _rule)
+            (sdcv--highlight-abbreviations start end source)))
+
+(defconst sdcv-duden-abbreviation-highlighter
+  (sdcv-abbreviation-highlighter 'sdcv-duden-abbreviations)
+  "Post-processor highlighting Duden abbreviations.")
+
+(defconst sdcv-webster-abbreviation-highlighter
+  (sdcv-abbreviation-highlighter 'sdcv-webster-abbreviations)
+  "Post-processor highlighting Webster abbreviations.")
 
 (defun sdcv--duden-expand-short-form (text)
       "Expand single-letter Duden headword abbreviations inside TEXT."
@@ -413,24 +449,31 @@ EXTRY provides the headword for expanding Duden short forms."
                        #'sdcv--duden-polish-section
                        #'sdcv--duden-highlight-quote-blocks
                        #'sdcv--duden-highlight-phrases
-                       #'sdcv--duden-highlight-abbreviations
+                       sdcv-duden-abbreviation-highlighter
                        #'sdcv--duden-highlight-headword-occurrences)
         :faces '(("\\(~<[^>\n]+>~\\)" 1 sdcv-duden-meta-face)
                  ("^\\([0-9]+\\.\\)" 1 sdcv-duden-sense-face)
                  ("^\\([a-z])\\)" 1 sdcv-duden-sense-face)
                  ;; Abkürzungen aus dem Duden-Abkürzungsverzeichnis -> gold
-                 ("\\(?:^\\|[[:space:]/(]\\)\\(jmd\\.\\|jmdm\\.\\|jmdn\\.\\|jmds\\.\\|etw\\.\\|ugs\\.\\|geh\\.\\|bildl\\.\\|übertr\\.\\|iron\\.\\|scherzh\\.\\|verächtl\\.\\|verhüll\\.\\|landsch\\.\\|bes\\.\\|allg\\.\\|dichter\\.\\|hist\\.\\|fachspr\\.\\|selten\\.\\|veraltend\\.\\|schriftl\\.\\|österr\\.\\|schweiz\\.\\|südd\\.\\|nordd\\.\\)" 1 sdcv-duden-abbreviation-face)
+                 ("\\(?:^\\|[[:space:]/(]\\)\\(jmd\\.\\|jmdm\\.\\|jmdn\\.\\|jmds\\.\\|etw\\.\\|ugs\\.\\|geh\\.\\|bildl\\.\\|übertr\\.\\|iron\\.\\|scherzh\\.\\|verächtl\\.\\|verhüll\\.\\|landsch\\.\\|bes\\.\\|allg\\.\\|dichter\\.\\|hist\\.\\|fachspr\\.\\|selten\\.\\|veraltend\\.\\|schriftl\\.\\|österr\\.\\|schweiz\\.\\|südd\\.\\|nordd\\.\\)" 1 sdcv-abbreviation-face)
                  ("^\\([^#*\n].*\\)$" 1 sdcv-duden-example-face)))
        (sdcv-html-rendering-rule
         :name "Duden – Das Synonymwörterbuch"
+        :post-process sdcv-duden-abbreviation-highlighter
         :faces '(("\\b[0-9]+\\." . font-lock-constant-face)
                  ("\\b[a-z])" . font-lock-keyword-face)
                  ("\\bSynonyme?\\b" . font-lock-function-name-face)))
        (sdcv-html-rendering-rule
         :name "Duden – Das Fremdwörterbuch"
+        :post-process sdcv-duden-abbreviation-highlighter
         :faces '(("\\b[0-9]+\\." . font-lock-constant-face)
                  ("\\b[a-z])" . font-lock-keyword-face)
                  ("\\bHerkunft\\b" . font-lock-function-name-face)))
+       (sdcv-html-rendering-rule
+        :name "Webster's Revised Unabridged Dictionary (1913)"
+        :post-process sdcv-webster-abbreviation-highlighter
+        :faces '(("\\b\\([0-9]+\\.\\)" 1 font-lock-constant-face)
+                 ("\\b\\(n\\.\\|v\\.\\|a\\.\\|adj\\.\\|adv\\.\\)" 1 font-lock-keyword-face)))
        (sdcv-html-rendering-rule
         :keywords '("PONS")
         :faces '(("\\b\\(sb\\.|sth\\.|etw\\.|jdn\\.|jdm\\.|adj\\.|adv\\.|prep\\.|conj\\.\\)\\b"

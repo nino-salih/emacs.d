@@ -198,6 +198,16 @@ list.  The default keeps the order of DICTS and falls back to the order of
                  (const :tag "Interactive per-dict selector" selector))
   :group 'sdcv)
 
+(defcustom sdcv-show-abbreviation-doc t
+  "When non-nil, show abbreviation expansions inline in `sdcv-mode'."
+  :type 'boolean
+  :group 'sdcv)
+
+(defface sdcv-abbreviation-doc-face
+  '((t :inherit shadow :slant italic))
+  "Face used for inline abbreviation expansion hints."
+  :group 'sdcv)
+
 ;;; ── Internal state ───────────────────────────────────────────────────────────
 
 (defvar sdcv--process nil
@@ -1199,23 +1209,15 @@ annotations can render in the minibuffer UI without being shadowed."
       (unless (string-empty-p oneline)
         (substring oneline 0 limit)))))
 
-(defun sdcv--render-entry (word entry)
-  "Insert a rendered section for ENTRY looked up as WORD."
+(defun sdcv--render-entry-body (word entry)
+  "Insert rendered body for ENTRY looked up as WORD."
   (let* ((dict          (alist-get 'dict entry))
          (found         (alist-get 'word entry))
          (definition    (alist-get 'definition entry))
-         (pref          (sdcv--dict-plist dict))
-         (display-name  (sdcv--dict-display-name dict))
-         (color         (plist-get pref :color))
          (rule          (sdcv--rendering-rule dict))
          (section-start (copy-marker (point))))
-    (let ((heading-start (point)))
-      (insert (format "* %s" display-name))
-      (sdcv--apply-heading-overlay heading-start (point) color)
-      (insert "\n"))
     (when (and found (not (string= found word)))
       (insert (format "  /Found as: %s/\n" found)))
-    (insert "\n")
     (condition-case err
         (if definition
             (sdcv--insert-definition definition entry rule)
@@ -1240,6 +1242,41 @@ annotations can render in the minibuffer UI without being shadowed."
       (set-marker section-start nil)
       (set-marker section-end nil))))
 
+(defun sdcv--render-entry (word entry)
+  "Insert a rendered section for ENTRY looked up as WORD."
+  (sdcv--render-dict-section word (list entry)))
+
+(defun sdcv--render-dict-section (word entries)
+  "Insert one dictionary section containing all ENTRIES for WORD."
+  (let* ((entry        (car entries))
+         (dict         (alist-get 'dict entry))
+         (pref         (sdcv--dict-plist dict))
+         (display-name (sdcv--dict-display-name dict))
+         (color        (plist-get pref :color)))
+    (let ((heading-start (point)))
+      (insert (format "* %s" display-name))
+      (sdcv--apply-heading-overlay heading-start (point) color)
+      (insert "\n\n"))
+    (cl-loop for entry in entries
+             for first = t then nil
+             do (progn
+                  (unless first
+                    (insert "\n"))
+                  (sdcv--render-entry-body word entry)))))
+
+(defun sdcv--group-results-by-dict (results)
+  "Return RESULTS grouped by dictionary while preserving first-seen order."
+  (let (groups)
+    (dolist (entry results)
+      (let* ((dict  (alist-get 'dict entry))
+             (group (assoc dict groups #'string=)))
+        (if group
+            (setcdr group (cons entry (cdr group)))
+          (push (list dict entry) groups))))
+    (mapcar (lambda (group)
+              (cons (car group) (nreverse (cdr group))))
+            (nreverse groups))))
+
 (defun sdcv--render (word results &optional kind)
   "Insert formatted RESULTS for WORD into the current buffer.
 KIND describes how the lookup resolved: `exact', `suggestion',
@@ -1257,7 +1294,8 @@ KIND describes how the lookup resolved: `exact', `suggestion',
                        word))))
     (if (null results)
         (insert (format "/No results found for \"%s\"./\n" word))
-      (mapc (lambda (entry) (sdcv--render-entry word entry)) results))))
+      (dolist (group (sdcv--group-results-by-dict results))
+        (sdcv--render-dict-section word (cdr group))))))
 
 ;;; ── Async query ─────────────────────────────────────────────────────────────
 
@@ -1335,6 +1373,9 @@ Pattern queries contain wildcard or whitespace syntax."
 (defvar-local sdcv--nav-pos 0
   "Current position in `sdcv--nav-history' (0 = most recent).")
 
+(defvar-local sdcv--abbreviation-doc-overlay nil
+  "Inline overlay showing the abbreviation expansion at point.")
+
 (defun sdcv--nav-push (word)
   "Push WORD onto the buffer-local navigation history, truncating forward."
   ;; Truncate any forward entries
@@ -1352,6 +1393,41 @@ otherwise this falls back to `thing-at-point'."
       (and (> (point) (point-min))
            (get-text-property (1- (point)) 'sdcv-lookup-word))
       (thing-at-point 'word t)))
+
+(defun sdcv--text-property-at-point (property)
+  "Return PROPERTY at point, falling back to the previous character."
+  (or (get-text-property (point) property)
+      (and (> (point) (point-min))
+           (get-text-property (1- (point)) property))))
+
+(defun sdcv--abbreviation-doc-at-point ()
+  "Return inline doc text for a rendered abbreviation at point."
+  (when sdcv-show-abbreviation-doc
+    (when-let* ((meaning (sdcv--text-property-at-point 'sdcv-abbreviation-meaning)))
+      (if-let ((abbrev (sdcv--text-property-at-point 'sdcv-abbreviation)))
+          (format "%s -> %s" abbrev meaning)
+        meaning))))
+
+(defun sdcv--clear-abbreviation-doc-overlay ()
+  "Remove the current abbreviation doc overlay."
+  (when (overlayp sdcv--abbreviation-doc-overlay)
+    (delete-overlay sdcv--abbreviation-doc-overlay)
+    (setq sdcv--abbreviation-doc-overlay nil)))
+
+(defun sdcv--update-abbreviation-doc-overlay ()
+  "Show abbreviation expansion in the current `sdcv-mode' buffer."
+  (when (bound-and-true-p sdcv-mode)
+    (sdcv--clear-abbreviation-doc-overlay)
+    (when-let* ((doc (sdcv--abbreviation-doc-at-point)))
+      (let ((overlay (make-overlay (line-end-position) (line-end-position)
+                                   (current-buffer) t t)))
+        (overlay-put overlay 'sdcv-overlay t)
+        (overlay-put overlay 'priority 1100)
+        (overlay-put overlay 'after-string
+                     (concat "\n  "
+                             (propertize (concat "=> " doc)
+                                         'face 'sdcv-abbreviation-doc-face)))
+        (setq sdcv--abbreviation-doc-overlay overlay)))))
 
 ;;; ── Display ─────────────────────────────────────────────────────────────────
 
@@ -1738,7 +1814,15 @@ Key bindings:
       (progn
         (setq-local truncate-lines nil)
         (setq-local word-wrap t)
+        (add-hook 'post-command-hook
+                  #'sdcv--update-abbreviation-doc-overlay
+                  nil t)
+        (sdcv--update-abbreviation-doc-overlay)
         (visual-line-mode 1))
+    (remove-hook 'post-command-hook
+                 #'sdcv--update-abbreviation-doc-overlay
+                 t)
+    (sdcv--clear-abbreviation-doc-overlay)
     (kill-local-variable 'truncate-lines)
     (kill-local-variable 'word-wrap)
     (visual-line-mode -1)))
