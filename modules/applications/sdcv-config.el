@@ -8,6 +8,14 @@
                                                    buffer-file-name)))
         nil t))
 
+(unless (require 'sdcv-duden-abbreviations nil t)
+  (load (expand-file-name "sdcv-duden-abbreviations"
+                          (file-name-directory (or load-file-name
+                                                   buffer-file-name)))
+        nil t))
+
+(defvar sdcv-duden-abbreviations)
+
 ;; Dictionaries live in ~/.emacs.d/dicts/ (nested subdirectories)
 (setq sdcv-data-dir (expand-file-name "dicts" user-emacs-directory))
 (setq sdcv-only-data-dir t)   ; ignore system-wide dicts
@@ -74,6 +82,11 @@
       "Face for Duden usage/register abbreviations (jmdm., etw., ugs., …)."
       :group 'sdcv)
 
+(defface sdcv-duden-abbreviation-link-face
+      '((t :inherit link :foreground "deep sky blue" :underline nil))
+      "Face used for clickable Duden abbreviations."
+      :group 'sdcv)
+
 (defface sdcv-duden-quote-background-face
       '((((background dark))  :background "#2d2d10" :extend t)
         (((background light)) :background "#fffff0" :extend t))
@@ -90,6 +103,48 @@
 (defconst sdcv--duden-suffix-form-regexp
   "\\(^\\|[[:space:](\\[\"'/*~]\\)-\\([[:alpha:]][[:alpha:]]*\\)\\([[:space:],;:!?)]\\|[*~/]\\|$\\)"
   "Regexp used to expand Duden -suffix abbreviations.")
+
+(defvar sdcv--duden-abbreviation-regexp nil
+  "Cached regexp matching Duden abbreviations.")
+
+(defun sdcv--duden-abbreviation-regexp ()
+      "Return a regexp that matches known Duden abbreviations."
+      (or sdcv--duden-abbreviation-regexp
+          (setq sdcv--duden-abbreviation-regexp
+                (concat "\\(?:\\`\\|[^[:alnum:]ÄÖÜäöüß]\\)\\("
+                        (regexp-opt
+                         (sort (mapcar #'car sdcv-duden-abbreviations)
+                               (lambda (left right)
+                                     (> (length left) (length right)))))
+                        "\\)\\(?:\\'\\|[^[:alnum:]ÄÖÜäöüß]\\)"))))
+
+(defun sdcv--duden-abbreviation-lookup-target (meaning)
+      "Return the lookup target for abbreviation MEANING."
+      (string-trim
+       (replace-regexp-in-string
+        "[([][^])\n]*[])]" ""
+        (car (split-string meaning "[,;]" t "[[:space:]]+")))))
+
+(defun sdcv--duden-highlight-abbreviations (start end _entry _rule)
+      "Color known Duden abbreviations and make RET look up their meaning."
+      (save-excursion
+            (goto-char start)
+            (while (re-search-forward (sdcv--duden-abbreviation-regexp) end t)
+                  (let* ((abbr (match-string-no-properties 1))
+                         (beg (match-beginning 1))
+                         (fin (match-end 1))
+                         (meaning (cdr (assoc abbr sdcv-duden-abbreviations #'string=)))
+                         (target (and meaning
+                                      (save-match-data
+                                            (sdcv--duden-abbreviation-lookup-target meaning)))))
+                        (when (and meaning target (not (string-empty-p target)))
+                              (add-text-properties
+                               beg fin
+                               `(sdcv-lookup-word ,target
+                                 help-echo ,(format "%s -> %s" abbr meaning)
+                                 mouse-face highlight))
+                              (sdcv--apply-face-overlay
+                               beg fin 'sdcv-duden-abbreviation-link-face 970))))))
 
 (defun sdcv--duden-expand-short-form (text)
       "Expand single-letter Duden headword abbreviations inside TEXT."
@@ -358,6 +413,7 @@ EXTRY provides the headword for expanding Duden short forms."
                        #'sdcv--duden-polish-section
                        #'sdcv--duden-highlight-quote-blocks
                        #'sdcv--duden-highlight-phrases
+                       #'sdcv--duden-highlight-abbreviations
                        #'sdcv--duden-highlight-headword-occurrences)
         :faces '(("\\(~<[^>\n]+>~\\)" 1 sdcv-duden-meta-face)
                  ("^\\([0-9]+\\.\\)" 1 sdcv-duden-sense-face)

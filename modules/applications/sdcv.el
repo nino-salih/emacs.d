@@ -1344,6 +1344,15 @@ Pattern queries contain wildcard or whitespace syntax."
   (unless (string= word (car sdcv--nav-history))
     (push word sdcv--nav-history)))
 
+(defun sdcv--lookup-target-at-point ()
+  "Return the sdcv lookup target at point.
+Text properties can provide `sdcv-lookup-word' for rendered cross references;
+otherwise this falls back to `thing-at-point'."
+  (or (get-text-property (point) 'sdcv-lookup-word)
+      (and (> (point) (point-min))
+           (get-text-property (1- (point)) 'sdcv-lookup-word))
+      (thing-at-point 'word t)))
+
 ;;; ── Display ─────────────────────────────────────────────────────────────────
 
 (defun sdcv--fill-buffer (buf word entries &optional kind)
@@ -1609,7 +1618,7 @@ inside the minibuffer.  Results are cached per (INPUT DICTS) pair."
 Exact hits are displayed immediately.  Fuzzy alternatives are offered through a
 grouped completion prompt."
   (interactive)
-  (let ((word (thing-at-point 'word t)))
+  (let ((word (sdcv--lookup-target-at-point)))
     (if word
         (sdcv--display-word word :allow-selector t)
       (message "sdcv: no word at point"))))
@@ -1690,7 +1699,7 @@ With DICTS (list of names), restrict search to those dictionaries."
   "Look up word at point within the sdcv buffer, adding to history.
 Shows grouped selector when multiple results are found."
   (interactive)
-  (let ((word (thing-at-point 'word t)))
+  (let ((word (sdcv--lookup-target-at-point)))
     (if word
         (sdcv--display-word word :allow-selector t)
       (message "sdcv: no word at point"))))

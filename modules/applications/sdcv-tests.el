@@ -52,5 +52,31 @@
   "Configuration should ignore dictionary-provided HTML colors."
   (should-not sdcv-shr-use-colors))
 
+(ert-deftest sdcv-test-duden-abbreviations-are-linked-to-meanings ()
+  "Known Duden abbreviations should be blue links to their resolved meanings."
+  (skip-unless (fboundp 'libxml-parse-html-region))
+  (let ((entry (sdcv-test--entry "Duden – Deutsches Universalwörterbuch"
+                                 "laufen"
+                                 sdcv-test--duden-html)))
+    (with-temp-buffer
+      (sdcv--render-entry "laufen" entry)
+      (goto-char (point-min))
+      (should (re-search-forward "st\\. V\\." nil t))
+      (should (equal (get-text-property (match-beginning 0) 'sdcv-lookup-word)
+                     "starkes Verb"))
+      (let* ((overlays (overlays-at (match-beginning 0)))
+             (faces (mapcar (lambda (overlay) (overlay-get overlay 'face))
+                            overlays)))
+        (should (memq 'sdcv-duden-abbreviation-link-face faces))))))
+
+(ert-deftest sdcv-test-lookup-target-prefers-text-property ()
+  "Lookup at point should prefer rendered cross-reference properties."
+  (with-temp-buffer
+    (insert "ugs.")
+    (add-text-properties (point-min) (point-max)
+                         '(sdcv-lookup-word "umgangssprachlich"))
+    (goto-char (point-min))
+    (should (equal (sdcv--lookup-target-at-point) "umgangssprachlich"))))
+
 (provide 'sdcv-tests)
 ;;; sdcv-tests.el ends here
