@@ -106,6 +106,12 @@
       "Background face applied to Duden #+begin_quote … #+end_quote blocks."
       :group 'sdcv)
 
+(defface sdcv-duden-idiom-background-face
+      '((((background dark))  :background "#283238" :extend t)
+        (((background light)) :background "#edf7fa" :extend t))
+      "Background face applied to Duden idiom and proverb blocks."
+      :group 'sdcv)
+
 (defvar sdcv--duden-headword nil
       "Currently rendered Duden headword.")
 
@@ -265,10 +271,14 @@ appear outside #+begin_quote blocks) are concatenated with the headword here."
       (save-excursion
             (goto-char start)
             (while (re-search-forward "^#\\+begin_quote$" end t)
-                  (let ((block-start (match-beginning 0)))
+                  (let* ((block-start (match-beginning 0))
+                         (face (if (get-text-property
+                                    block-start 'sdcv-duden-idiom-block)
+                                       'sdcv-duden-idiom-background-face
+                                     'sdcv-duden-quote-background-face)))
                         (when (re-search-forward "^#\\+end_quote$" end t)
                               (sdcv--apply-face-overlay block-start (match-end 0)
-                                                                             'sdcv-duden-quote-background-face 800))))))
+                                                        face 800))))))
 
 (defun sdcv--duden-highlight-marked-headwords (start end _entry _rule)
       "Apply one headword overlay to the first Duden headword marker."
@@ -357,7 +367,11 @@ appear outside #+begin_quote blocks) are concatenated with the headword here."
       "Open a Duden idiom/proverb quote block unless one is active."
       (unless sdcv--duden-phrase-block-open
             (unless (bolp) (insert "\n"))
-            (insert "\n#+begin_quote\n")
+            (insert "\n")
+            (let ((start (point)))
+                  (insert "#+begin_quote\n")
+                  (add-text-properties start (point)
+                                       '(sdcv-duden-idiom-block t)))
             (setq sdcv--duden-phrase-block-open t)))
 
 (defun sdcv--duden-close-phrase-block ()
@@ -407,6 +421,10 @@ appear outside #+begin_quote blocks) are concatenated with the headword here."
                                     ((string-match-p "\\`[a-z])\\'" sub)
                                      (insert "\n" sub " "))
                                     (t
+                                     (when (and sdcv--duden-phrase-block-open
+                                                (string-match-p " " sub)
+                                                (not (bolp)))
+                                           (insert "\n"))
                                      (let ((s (point)))
                                            (insert sub)
                                            (add-text-properties
