@@ -1,10 +1,6 @@
 ;;; -*- lexical-binding: t; -*-
-;; Some snake oil during the startup.  Probably won't hurt and is
-;; reverted right after the Emacs initialization finishes.
-(add-hook 'after-init-hook
-          `(lambda ()
-             (setq gc-cons-threshold ,gc-cons-threshold))
-          'append)
+;; Maximize GC threshold during startup for faster loading.
+;; Restored to 8 MiB by `emacs-startup-hook' in init.el.
 (setq gc-cons-threshold most-positive-fixnum)
 
 

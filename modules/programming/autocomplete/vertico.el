@@ -4,6 +4,8 @@
   :straight (vertico :files (:defaults "extensions/*"))
   :bind (("C-x M-r" . vertico-repeat)
          :map vertico-map
+         ("C-j" . vertico-next)
+         ("C-k" . vertico-previous)
          ("C-l" . vertico-directory-delete-word)
          ("M-g" . vertico-multiform-grid)
          ("M-q" . vertico-multiform-flat))

@@ -53,4 +53,4 @@
   ;; match the background color corresponding to the current theme. Important
   ;; since I have a light theme and dark theme I switch between. This has no
   ;; function unless you use something similar
-  (add-hook 'kb/themes-hooks #'(lambda () (interactive) (kind-icon-reset-cache))))
+  (add-hook 'enable-theme-functions (lambda (_) (kind-icon-reset-cache))))

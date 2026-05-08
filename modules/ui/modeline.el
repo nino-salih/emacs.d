@@ -1,3 +1,5 @@
+;;; -*- lexical-binding: t; -*-
+
 (use-package doom-modeline
   :straight t
   :init (doom-modeline-mode 1)
@@ -237,3 +239,71 @@
 ;; Hooks that run before/after the modeline version string is updated
 (doom-modeline-before-update-env-hook nil)
 (doom-modeline-after-update-env-hook nil))
+
+;; Fix for doom-modeline not supporting custom meow states properly
+(with-eval-after-load 'doom-modeline-segments
+  (defface doom-modeline-meow-paren-state
+    '((t (:inherit font-lock-constant-face)))
+    "Face for the paren state in meow-edit indicator.")
+
+  (defface doom-modeline-meow-advanced-motion-state
+    '((t (:inherit font-lock-type-face)))
+    "Face for the advanced-motion state in meow-edit indicator.")
+
+  (defun doom-modeline--meow ()
+    "The current Meow state. Requires `meow-mode' to be enabled."
+    (when (bound-and-true-p meow-mode)
+      (let-alist (pcase meow--current-state
+                   ('normal '((face    . doom-modeline-meow-normal-state)
+                              (icon    . "nf-md-alpha_n_circle")
+                              (unicode . "🅝")))
+                   ('insert '((face    . doom-modeline-meow-insert-state)
+                              (icon    . "nf-md-alpha_i_circle")
+                              (unicode . "🅘")))
+                   ('beacon '((face    . doom-modeline-meow-beacon-state)
+                              (icon    . "nf-md-alpha_b_circle")
+                              (unicode . "🅑")))
+                   ('motion '((face    . doom-modeline-meow-motion-state)
+                              (icon    . "nf-md-alpha_m_circle")
+                              (unicode . "🅜")))
+                   ('keypad '((face    . doom-modeline-meow-keypad-state)
+                              (icon    . "nf-md-alpha_k_circle")
+                              (unicode . "🅚")))
+                   ('paren '((face    . doom-modeline-meow-paren-state)
+                              (icon    . "nf-md-alpha_p_circle")
+                              (unicode . "🅟")))
+                   ('advanced-motion '((face    . doom-modeline-meow-advanced-motion-state)
+                              (icon    . "nf-md-alpha_a_circle")
+                              (unicode . "🅐")))
+                   (_       '((face    . doom-modeline-meow-normal-state)
+                              (icon    . "nf-md-alpha_n_circle")
+                              (unicode . "🅝"))))
+        (doom-modeline--modal-icon
+         (substring-no-properties meow--indicator)
+         .face
+         (symbol-name meow--current-state)
+         .icon
+         .unicode))))
+
+  (doom-modeline-def-segment modals
+    "Displays modal editing states.
+Including `evil', `overwrite', `god', `ryo' and `xha-fly-kyes', etc."
+    (when doom-modeline-modal
+      (let* ((evil (doom-modeline--evil))
+             (ow (doom-modeline--overwrite))
+             (god (doom-modeline--god))
+             (ryo (doom-modeline--ryo))
+             (xf (doom-modeline--xah-fly-keys))
+             (boon (doom-modeline--boon))
+             (meow (doom-modeline--meow))
+             (vsep (doom-modeline-vspc))
+             (sep (and (or evil ow god ryo xf boon meow) (doom-modeline-spc))))
+        (concat sep
+                (and evil (concat evil (and (or ow god ryo xf boon meow) vsep)))
+                (and ow (concat ow (and (or god ryo xf boon meow) vsep)))
+                (and god (concat god (and (or ryo xf boon meow) vsep)))
+                (and ryo (concat ryo (and (or xf boon meow) vsep)))
+                (and xf (concat xf (and (or boon meow) vsep)))
+                (and boon (concat boon (and meow vsep)))
+                meow
+                sep)))))

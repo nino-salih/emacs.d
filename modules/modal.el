@@ -99,13 +99,16 @@
 (meow-define-state paren
   "meow state for interacting with smartparens"
   :lighter " [P]"
-  :keymap meow-paren-keymap)
+  :keymap meow-paren-keymap
+  (smartparens-strict-mode (if smartparens-strict-mode -1 1)))
 
 ;; meow-define-state creates the variable
 (setq meow-cursor-type-paren 'hollow)
 
 (meow-define-keys 'paren
   '("<escape>" . meow-normal-mode)
+  '("i" . meow-insert)
+  '("a" . meow-append)
   '("l" . sp-forward-sexp)
   '("h" . sp-backward-sexp)
   '("j" . sp-down-sexp)
@@ -114,12 +117,90 @@
   '("b" . sp-forward-barf-sexp)
   '("v" . sp-backward-barf-sexp)
   '("c" . sp-backward-slurp-sexp)
+  '("s" . sp-splice-sexp)
+  '("r" . sp-raise-sexp)
+  '("d" . sp-kill-sexp)
+  '("w" . sp-wrap-round)
+  '("W" . sp-unwrap-sexp)
+  '("t" . sp-transpose-sexp)
+  '("J" . sp-join-sexp)
+  '("x" . sp-split-sexp)
   '("u" . meow-undo))
+
+(setq meow-advanced-motion-keymap (make-keymap))
+(meow-define-state advanced-motion
+  "meow state for advanced motion"
+  :lighter " [A]"
+  :keymap meow-advanced-motion-keymap)
+
+(setq meow-cursor-type-advanced-motion 'hollow)
+
+(meow-define-keys 'advanced-motion
+  '("<escape>" . meow-motion-mode)
+  '("0" . meow-expand-0)
+  '("9" . meow-expand-9)
+  '("8" . meow-expand-8)
+  '("7" . meow-expand-7)
+  '("6" . meow-expand-6)
+  '("5" . meow-expand-5)
+  '("4" . meow-expand-4)
+  '("3" . meow-expand-3)
+  '("2" . meow-expand-2)
+  '("1" . meow-expand-1)
+  '("-" . negative-argument)
+  '(";" . meow-reverse)
+  '("," . meow-inner-of-thing)
+  '("." . meow-bounds-of-thing)
+  '("[" . meow-beginning-of-thing)
+  '("]" . meow-end-of-thing)
+  '("b" . meow-back-word)
+  '("B" . meow-back-symbol)
+  '("e" . meow-next-word)
+  '("E" . meow-next-symbol)
+  '("f" . meow-find)
+  '("g" . meow-cancel-selection)
+  '("j" . meow-next)
+  '("J" . meow-next-expand)
+  '("k" . meow-prev)
+  '("K" . meow-prev-expand)
+  '("h" . meow-left)
+  '("H" . meow-left-expand)
+  '("l" . meow-right)
+  '("L" . meow-right-expand)
+  '("m" . meow-join)
+  '("n" . meow-search)
+  '("o" . meow-block)
+  '("O" . meow-to-block)
+  '("q" . meow-quit)
+  '("t" . meow-till)
+  '("v" . meow-visit)
+  '("w" . meow-mark-word)
+  '("W" . meow-mark-symbol)
+  '("x" . meow-line)
+  '("X" . meow-goto-line)
+  '("y" . meow-save)
+  '("z" . meow-pop-selection)
+  '("'" . repeat))
 
 
 ;; Vterm config
 (with-eval-after-load 'meow
-  (push '(vterm-mode . insert) meow-mode-state-list)
+  (dolist (entry '((vterm-mode          . insert)
+                   (cider-repl-mode     . insert)
+                   (eshell-mode         . insert)
+                   (dired-mode          . motion)
+                   (magit-mode          . motion)
+                   (magit-status-mode   . motion)
+                   (magit-log-mode      . motion)
+                   (magit-diff-mode     . motion)
+                   (help-mode           . motion)
+                   (lsp-help-mode       . motion)
+                   (Info-mode           . motion)
+                   (special-mode        . motion)
+                   (org-agenda-mode     . motion)
+                   (calendar-mode       . motion)
+                   (dashboard-mode      . motion)))
+    (push entry meow-mode-state-list))
   (add-hook 'vterm-mode-hook
             (lambda ()
               (add-hook 'meow-insert-enter-hook
@@ -127,7 +208,19 @@
                         nil t)
               (add-hook 'meow-insert-exit-hook
                         (lambda () (vterm-copy-mode 1))
+                        nil t)))
+  ;; In cider-repl-mode: jump to the input line when entering insert state.
+  (add-hook 'cider-repl-mode-hook
+            (lambda ()
+              (add-hook 'meow-insert-enter-hook
+                        (lambda ()
+                          (when (and (bound-and-true-p cider-repl-input-start-mark)
+                                     (< (point) cider-repl-input-start-mark))
+                            (goto-char cider-repl-input-start-mark)))
                         nil t))))
 
 
 (setq meow-keypad-leader-dispatch "C-c")
+
+;; Append will always be at the end of the line.
+(setq meow-use-cursor-position-hack t)

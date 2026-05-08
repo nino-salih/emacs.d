@@ -11,8 +11,8 @@
          ;; M-g …
          ("M-g g" . consult-line)
          ("M-g o" . consult-outline)
-	     ("C-c a i" . consult-imenu)
-	     ("M-g i" . consult-imenu)
+	       ("C-c a i" . consult-imenu)
+	       ("M-g i" . consult-imenu)
          ("M-g I" . consult-info) 
          ("M-g r" . consult-ripgrep)
          ("M-g m" . consult-mark)
@@ -71,8 +71,17 @@
                   (delq 'consult--source-project-buffer
                         (delq 'consult--source-project-file consult-buffer-sources)))
 
-            (setq consult--source-hidden-buffer
-                  (plist-put consult--source-hidden-buffer :narrow ?h))
+            (setq consult-source-hidden-buffer
+                  (plist-put consult-source-hidden-buffer :narrow ?h))
+
+            (defun vifon/buffer-file-or-directory-name (buf)
+              "Return the file or directory name associated with BUF.
+               For `dired' buffers, return the directory. For file buffers,
+               return the file name. Otherwise return nil."
+              (with-current-buffer buf
+                (or buffer-file-name
+                    (and (derived-mode-p 'dired-mode)
+                         default-directory))))
 
             (defvar vifon/consult--source-disassociated-file-buffer
               `(:name     "Disassociated File"

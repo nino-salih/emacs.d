@@ -8,6 +8,9 @@
           (lambda ()
             (setq gc-cons-threshold (expt 2 23))))
 
+;; used for Modern LSP Server default is 64KB now we have 4MB
+(setq read-process-output-max (* 4 1024 1024))
+
 (when (display-graphic-p)
   (global-unset-key (kbd "C-z"))
   (global-unset-key (kbd "C-x C-z")))
@@ -37,6 +40,50 @@
       (insert-file-contents file-path)
       (eval-buffer))
     (message "File evaluated")))
+
+(defun my/reload-config ()
+  "Reload the Emacs configuration from `user-init-file`."
+  (interactive)
+  (load-file user-init-file)
+  (message "Emacs configuration reloaded"))
+
+
+;; disable redisplay parenthesis algorithm for right-to-left (Arabic, Hebrew etc)
+(setq-default bidi-display-reordering 'left-to-right
+              bidi-paragraph-direction 'left-to-right)
+(setq bidi-inhibit-bpa t)
+
+;; disable syntax-highlight while typing
+(setq redisplay-skip-fontification-on-input t)
+
+;; Save Clipboard before Killing
+(setq save-interprogram-paste-before-kill t)
+
+;; Disable Dupblicates in Kill Ring
+(setq kill-do-not-save-duplicates t)
+
+;; Presist Kill Ring after Restarts
+(savehist-mode 1)
+
+(setq savehist-additional-variables
+      '(search-ring regexp-search-ring kill-ring))
+
+;; remove fonts, overlays etc so the savehist will not bloat
+(add-hook 'savehist-save-hook
+          (lambda ()
+            (setq kill-ring
+                  (mapcar #'substring-no-properties
+                          (cl-remove-if-not #'stringp kill-ring)))))
+
+;; Enable recent files
+(recentf-mode 1)
+
+;; make a script automatically executable after save
+(add-hook 'after-save-hook
+          #'executable-make-buffer-file-executable-if-script-p)
+
+;; Remove the double escape everything, default is 'read
+(setq reb-re-syntax 'string)
 
 (load-lisp-files-in-dir "modules" 5)
 

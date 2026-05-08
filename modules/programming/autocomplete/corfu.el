@@ -4,11 +4,14 @@
   :straight (corfu :files (:defaults "extensions/*"))
   :init (global-corfu-mode 1)
   :bind
-  ;; Configure SPC for separator insertion
   (:map corfu-map 
-     ("M-SPC" . corfu-insert-separator)
-     ("C-j" . corfu-next)
-     ("C-k" . corfu-previous)
+     ("C-SPC" . corfu-insert-separator)
+     ("C-j"   . corfu-next)
+     ("C-k"   . corfu-previous)
+     ("M-i"   . corfu-popupinfo-toggle)        ; toggle doc popup
+     ("M-o"   . corfu-popupinfo-documentation) ; open doc in own buffer
+     ("M-j"   . corfu-popupinfo-scroll-up)     ; scroll doc popup down
+     ("M-k"   . corfu-popupinfo-scroll-down)   ; scroll doc popup up
   )
   :custom 
   (completion-cycle-threshold nil)
@@ -24,5 +27,6 @@
   (corfu-max-width corfu-min-width) ; Always have the same width
   (corfu-count 14)
   (corfu-scroll-margin 4)
-  (corfu-popupinfo-mode 1)
-  (corfu-popupinfo-delay 0.25))
+  (corfu-popupinfo-delay 0.25)
+  :config
+  (corfu-popupinfo-mode 1))

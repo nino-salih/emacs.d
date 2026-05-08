@@ -41,11 +41,12 @@
 (setq enable-recursive-minibuffers t)
 (minibuffer-depth-indicate-mode 1)
 
-;; Use the completing-read UI for the M-tab completion unless
-;; overridden (for example by `corfu').
+;; Use consult-completion-in-region as fallback when corfu is not active
+;; (e.g. in special buffers). Corfu sets its own completion-in-region-function
+;; via global-corfu-mode and must not be overridden here.
 (setq-default completion-in-region-function
               (lambda (&rest args)
-                (apply (if vertico-mode
+                (apply (if (and vertico-mode (not (bound-and-true-p corfu-mode)))
                            #'consult-completion-in-region
                          #'completion--in-region)
                        args)))

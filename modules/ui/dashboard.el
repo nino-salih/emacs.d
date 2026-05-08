@@ -1,3 +1,5 @@
+;;; -*- lexical-binding: t; -*-
+
 ;; use-package with package.el:
 (use-package dashboard
   :straight t
@@ -30,25 +32,8 @@
   (dashboard-set-heading-icons t)
   (dashboard-set-file-icons t)
 
-  ;; Show the navigation buttons
-  (dashboard-set-navigator t)
-
-
-  ;; Format: "(icon title help action face prefix suffix)"
-  (dashboard-navigator-buttons
-        `(;; line1
-          ((,(nerd-icons-faicon "nf-fa-github" :height 1.1 :v-adjust 0.0)
-          "Homepage"
-          "Browse homepage"
-          (lambda (&rest _) (browse-url "homepage")))
-          ("★" "Star" "Show stars" (lambda (&rest _) (show-stars)) warning)
-          ("?" "" "?/h" #'show-help nil "<" ">"))
-          ;; line 2
-          ((,(nerd-icons-faicon "nf-fa-linkedin_square" :height 1.1 :v-adjust 0.0)
-            "Linkedin"
-            ""
-            (lambda (&rest _) (browse-url "homepage")))
-          ("⚑" nil "Show flags" (lambda (&rest _) (message "flag")) error))))
+  ;; Navigator disabled — add real URLs here if needed
+  (dashboard-set-navigator nil)
 
   (dashboard-projects-backend 'project-el)
   ;; Customize which sections appear in the startup screen
