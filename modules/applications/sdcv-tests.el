@@ -326,6 +326,20 @@
                             overlays)))
         (should (memq 'sdcv-abbreviation-link-face faces))))))
 
+(ert-deftest sdcv-test-adjacent-abbreviations-are-linked ()
+  "Adjacent abbreviations should both get lookup properties."
+  (with-temp-buffer
+    (insert "gelegtl. Fachspr.")
+    (sdcv--highlight-abbreviations (point-min) (point-max)
+                                   'sdcv-duden-abbreviations)
+    (goto-char (point-min))
+    (should (re-search-forward "gelegtl\\." nil t))
+    (should (equal (get-text-property (match-beginning 0) 'sdcv-lookup-word)
+                   "gelegentlich"))
+    (should (re-search-forward "Fachspr\\." nil t))
+    (should (equal (get-text-property (match-beginning 0) 'sdcv-lookup-word)
+                   "Fachsprache"))))
+
 (ert-deftest sdcv-test-abbreviation-doc-at-point ()
   "Abbreviations should expose their meaning at point."
   (skip-unless (fboundp 'libxml-parse-html-region))
@@ -387,6 +401,17 @@
       (should (re-search-forward "franz\\." nil t))
       (should (equal (get-text-property (match-beginning 0) 'sdcv-lookup-word)
                      "französisch")))))
+
+(ert-deftest sdcv-test-capitalized-duden-language-abbreviation-is-linked ()
+  "Capitalized Duden language abbreviations from entries should resolve."
+  (with-temp-buffer
+    (insert "vlat. Gall.")
+    (sdcv--highlight-abbreviations (point-min) (point-max)
+                                   'sdcv-duden-abbreviations)
+    (goto-char (point-min))
+    (should (re-search-forward "Gall\\." nil t))
+    (should (equal (get-text-property (match-beginning 0) 'sdcv-lookup-word)
+                   "gallisch"))))
 
 (ert-deftest sdcv-test-webster-abbreviations-are-linked ()
   "Webster abbreviations should resolve through the Webster alist only."

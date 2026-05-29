@@ -40,6 +40,9 @@
         (:name    "Duden – Das Fremdwörterbuch"
          :display "Duden Fremd"
          :color   "orchid")
+        (:name    "Duden - Das Herkunftswörterbuch (De-De)"
+         :display "Duden Herkunft"
+         :color   "dark orange")
         (:name    "Webster's Revised Unabridged Dictionary (1913)"
          :display "Webster"
          :color   "forest green")
@@ -182,7 +185,8 @@ SOURCE may be an alist, a symbol naming an alist, or a function returning one."
                                        help-echo ,(format "%s -> %s" abbr meaning)
                                        mouse-face highlight))
                                     (sdcv--apply-face-overlay
-                                     beg fin 'sdcv-abbreviation-link-face 970)))))))
+                                     beg fin 'sdcv-abbreviation-link-face 970))
+                              (goto-char fin))))))
 
 (defun sdcv-abbreviation-highlighter (source)
       "Return a region post-processor for abbreviation alist SOURCE."
@@ -637,6 +641,15 @@ EXTRY provides the headword for expanding Duden short forms."
         :faces '(("\\b[0-9]+\\." . font-lock-constant-face)
                  ("\\b[a-z])" . font-lock-keyword-face)
                  ("\\bHerkunft\\b" . font-lock-function-name-face)))
+       (sdcv-html-rendering-rule
+        :name "Duden - Das Herkunftswörterbuch (De-De)"
+        :post-process (sdcv-compose-region-processors
+                       #'sdcv--duden-highlight-references
+                       sdcv-duden-abbreviation-highlighter)
+        :faces '(("\\b[0-9]+\\." . font-lock-constant-face)
+                 ("\\b[a-z])" . font-lock-keyword-face)
+                 ("\\(?:^\\|[[:space:]/(]\\)\\(Abl\\.\\|Bed\\.\\|Zus\\.\\)"
+                  1 sdcv-abbreviation-face)))
        (sdcv-html-rendering-rule
         :name "Webster's Revised Unabridged Dictionary (1913)"
         :merge-definitions #'sdcv--webster-merge-definitions
